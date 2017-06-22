@@ -175,10 +175,7 @@ export default {
 
     // Destroys the VIFs cloned from the template.
     await Promise.all(mapToArray(vm.$VIFs, vif => this._deleteVif(vif)))
-
-    if (vm.$VIFs.length !== 0) {
-      await this._waitObjectState(vm.$id, vm => vm.$VIFs.length === 0)
-    }
+    const oldVifs = map(vm.$VIFs, '$ref')
 
     // Creates the VIFs specified by the user.
     let nVifs = 0
@@ -232,7 +229,8 @@ export default {
     // wait for the record with all the VBDs and VIFs
     return this._waitObjectState(vm.$id, vm =>
       vm.VBDs.length === nVbds &&
-      vm.VIFs.length === nVifs
+      vm.VIFs.length === nVifs &&
+      intersection(oldVifs, vm.VIFs).length === 0
     )
   },
 
