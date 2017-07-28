@@ -370,6 +370,7 @@ export const createSR = defer.onFailure(async function ($onFailure, { template, 
       arbiter: !!param['arbiter']
     }))
     await xapi.xo.setData(xosanSrRef, 'xosan_config', {
+      version: 'beta2',
       nodes: nodes,
       template: template,
       network: xosanNetwork.$id,
