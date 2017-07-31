@@ -302,7 +302,7 @@ async function testSR ({sr}) {
   })
 }
 
-export const createSR = defer.onFailure(async function ($onFailure, { template, pif, vlan, srs, glusterType, redundancy }) {
+export const createSR = defer.onFailure(async function ($onFailure, { template, pif, vlan, srs, glusterType, redundancy, brickSize = MAX_DISK_SIZE }) {
   if (!this.requestResource) {
     throw new Error('requestResource is not a function')
   }
@@ -351,7 +351,7 @@ export const createSR = defer.onFailure(async function ($onFailure, { template, 
       arbiter.arbiter = true
     }
     const ipAndHosts = await asyncMap(vmsAndSrs, vmAndSr => _prepareGlusterVm(xapi, vmAndSr.sr, vmAndSr.vm, xosanNetwork,
-      NETWORK_PREFIX + (vmIpLastNumber++), {maxDiskSize: MAX_DISK_SIZE}))
+      NETWORK_PREFIX + (vmIpLastNumber++), {maxDiskSize: brickSize}))
     const glusterEndpoint = { xapi, hosts: map(ipAndHosts, ih => ih.host), addresses: map(ipAndHosts, ih => ih.address) }
     await configureGluster(redundancy, ipAndHosts, glusterEndpoint, glusterType, arbiter)
     debug('xosan gluster volume started')
@@ -377,8 +377,10 @@ export const createSR = defer.onFailure(async function ($onFailure, { template, 
       type: glusterType,
       redundancy
     })
+    debug('scanning new SR')
     await xapi.call('SR.scan', xosanSrRef)
     // TODO: delete me, this is just for development.
+    debug('creating a test VM on new SR')
     await this::testSR({sr: xosanSrRef})
   } finally {
     delete CURRENTLY_CREATING_SRS[xapi.pool.$id]
@@ -428,7 +430,7 @@ export async function replaceBrick ({ xosansr, previousBrick, newLvmSr }) {
   const previousVMEntry = _getIPToVMDict(xapi, xosansr)[previousBrick]
   const arbiter = previousNode.arbiter
   let { data, newVM, addressAndHost } = await this::insertNewGlusterVm(xapi, xosansr, newLvmSr,
-    {labelSuffix: arbiter ? '_arbiter' : '', glusterEndpoint, newIpAddress, increaseDataDisk: !arbiter})
+    {labelSuffix: arbiter ? '_arbiter' : '', glusterEndpoint, newIpAddress, increaseDataDisk: !arbiter, brickSize: MAX_DISK_SIZE})
   const brickName = _getBrickName(addressAndHost.address)
   await glusterCmd(glusterEndpoint, `volume replace-brick xosan ${previousBrick} ${brickName} commit force`)
   await glusterCmd(glusterEndpoint, 'peer detach ' + previousIp, true)
@@ -498,7 +500,6 @@ async function _prepareGlusterVm (xapi, lvmSr, newVM, xosanNetwork, ipAddress, {
     const srFreeSpace = sr.physical_size - sr.physical_utilisation
     // we use a percentage because it looks like the VDI overhead is proportional
     const newSize = floor2048(Math.min(maxDiskSize, (srFreeSpace + dataDisk.virtual_size) * XOSAN_DATA_DISK_USEAGE_RATIO))
-    // TODO remove MAX_DISK_SIZE limitation. it's just used during the beta
     await xapi._resizeVdi(dataDisk, Math.min(newSize, XOSAN_MAX_DISK_SIZE))
   }
   await xapi.startVm(newVM)
@@ -535,8 +536,8 @@ function _findIPAddressOutsideList (reservedList) {
   return null
 }
 
-const insertNewGlusterVm = defer.onFailure(async function ($onFailure, xapi, xosansr, lvmsrId, {labelSuffix = '', glusterEndpoint = null, ipAddress = null,
-  increaseDataDisk = true, maxDiskSize = Infinity}) {
+const insertNewGlusterVm = defer.onFailure(async function ($onFailure, xapi, xosansr, lvmsrId, {labelSuffix = '',
+  glusterEndpoint = null, ipAddress = null, increaseDataDisk = true, brickSize = Infinity}) {
   const data = xapi.xo.getData(xosansr, 'xosan_config')
   if (ipAddress === null) {
     ipAddress = _findAFreeIPAddress(data.nodes)
@@ -546,7 +547,7 @@ const insertNewGlusterVm = defer.onFailure(async function ($onFailure, xapi, xos
   // can't really copy an existing VM, because existing gluster VMs disks might too large to be copied.
   const newVM = await this::_importGlusterVM(xapi, data.template, lvmsrId)
   $onFailure(() => xapi.deleteVm(newVM, true))
-  const addressAndHost = await _prepareGlusterVm(xapi, srObject, newVM, xosanNetwork, ipAddress, {labelSuffix, increaseDataDisk, maxDiskSize})
+  const addressAndHost = await _prepareGlusterVm(xapi, srObject, newVM, xosanNetwork, ipAddress, {labelSuffix, increaseDataDisk, maxDiskSize: brickSize})
   if (!glusterEndpoint) {
     glusterEndpoint = this::_getGlusterEndpoint(xosansr)
   }
@@ -572,7 +573,7 @@ export const addBricks = defer.onFailure(async function ($onFailure, {xosansr, l
       // TODO remove MAX_DISK_SIZE limitation. it's just used during the beta
       const {newVM, addressAndHost} = await this::insertNewGlusterVm(xapi, xosansr, newSr, {
         ipAddress,
-        maxDiskSize: MAX_DISK_SIZE
+        brickSize: MAX_DISK_SIZE
       })
       $onFailure(() => glusterCmd(glusterEndpoint, 'peer detach ' + ipAddress, true))
       $onFailure(() => xapi.deleteVm(newVM, true))
@@ -688,7 +689,7 @@ POSSIBLE_CONFIGURATIONS[15] = [
   { layout: 'replica', redundancy: 3, capacity: 5 }]
 POSSIBLE_CONFIGURATIONS[16] = [{ layout: 'replica', redundancy: 2, capacity: 8 }]
 
-export async function computeXosanPossibleOptions ({ lvmSrs }) {
+export async function computeXosanPossibleOptions ({ lvmSrs, brickSize = MAX_DISK_SIZE }) {
   const count = lvmSrs.length
   const configurations = POSSIBLE_CONFIGURATIONS[count]
   if (!configurations) {
@@ -698,10 +699,9 @@ export async function computeXosanPossibleOptions ({ lvmSrs }) {
     const xapi = this.getXapi(lvmSrs[0])
     const srs = map(lvmSrs, srId => xapi.getObject(srId))
     const srSizes = map(srs, sr => sr.physical_size - sr.physical_utilisation)
-    // TODO remove MAX_DISK_SIZE limitation. it's just used during the beta
-    const minSize = Math.min.apply(null, srSizes.concat(MAX_DISK_SIZE))
-    const brickSize = Math.floor((minSize - XOSAN_VM_SYSTEM_DISK_SIZE) * XOSAN_DATA_DISK_USEAGE_RATIO)
-    return configurations.map(conf => ({ ...conf, availableSpace: brickSize * conf.capacity }))
+    const minSize = Math.min.apply(null, srSizes.concat(brickSize))
+    const finalBrickSize = Math.floor((minSize - XOSAN_VM_SYSTEM_DISK_SIZE) * XOSAN_DATA_DISK_USEAGE_RATIO)
+    return configurations.map(conf => ({ ...conf, availableSpace: finalBrickSize * conf.capacity }))
   }
 }
 
@@ -711,6 +711,9 @@ computeXosanPossibleOptions.params = {
     items: {
       type: 'string'
     }
+  },
+  brickSize: {
+    type: 'number'
   }
 }
 
