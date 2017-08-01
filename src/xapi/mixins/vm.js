@@ -111,7 +111,6 @@ export default {
       }
     }
 
-    let nVbds = vm.VBDs.length
     let hasBootableDisk = !!find(vm.$VBDs, 'bootable')
 
     // Inserts the CD if necessary.
@@ -122,8 +121,6 @@ export default {
         bootable: true
       })
       hasBootableDisk = true
-
-      ++nVbds
     }
 
     // Modify existing (previous template) disks if necessary
@@ -153,57 +150,49 @@ export default {
     // TODO: set vm.suspend_SR
     if (!isEmpty(vdis)) {
       const devices = await this.call('VM.get_allowed_VBD_devices', vm.$ref)
-      await Promise.all(mapToArray(vdis, (vdiDescription, i) => {
-        ++nVbds
-
-        return this._createVdi(
-          vdiDescription.size, // FIXME: Should not be done in Xapi.
-          {
-            name_label: vdiDescription.name_label,
-            name_description: vdiDescription.name_description,
-            sr: vdiDescription.sr || vdiDescription.SR
-          }
-        )
-          .then(ref => this._getOrWaitObject(ref))
-          .then(vdi => this._createVbd(vm, vdi, {
-            // Either the CD or the 1st disk is bootable (only useful for PV VMs)
-            bootable: !(hasBootableDisk || i),
-            userdevice: devices[i]
-          }))
-      }))
+      await Promise.all(mapToArray(vdis, (vdiDescription, i) => this._createVdi(
+        vdiDescription.size, // FIXME: Should not be done in Xapi.
+        {
+          name_label: vdiDescription.name_label,
+          name_description: vdiDescription.name_description,
+          sr: vdiDescription.sr || vdiDescription.SR
+        }
+      )
+        .then(ref => this._getOrWaitObject(ref))
+        .then(vdi => this._createVbd(vm, vdi, {
+          // Either the CD or the 1st disk is bootable (only useful for PV VMs)
+          bootable: !(hasBootableDisk || i),
+          userdevice: devices[i]
+        }))
+      ))
     }
 
     // Destroys the VIFs cloned from the template.
     await Promise.all(mapToArray(vm.$VIFs, vif => this._deleteVif(vif)))
-    const oldVifs = map(vm.$VIFs, '$ref')
 
     // Creates the VIFs specified by the user.
-    let nVifs = 0
     if (vifs) {
       const devices = await this.call('VM.get_allowed_VIF_devices', vm.$ref)
-      await Promise.all(mapToArray(vifs, (vif, index) => {
-        ++nVifs
-
-        return this._createVif(
-          vm,
-          this.getObject(vif.network),
-          {
-            ipv4_allowed: vif.ipv4_allowed,
-            ipv6_allowed: vif.ipv6_allowed,
-            device: devices[index],
-            locking_mode: isEmpty(vif.ipv4_allowed) && isEmpty(vif.ipv6_allowed) ? 'network_default' : 'locked',
-            mac: vif.mac,
-            mtu: vif.mtu
-          }
-        )
-      }))
+      await Promise.all(mapToArray(vifs, (vif, index) => this._createVif(
+        vm,
+        this.getObject(vif.network),
+        {
+          ipv4_allowed: vif.ipv4_allowed,
+          ipv6_allowed: vif.ipv6_allowed,
+          device: devices[index],
+          locking_mode: isEmpty(vif.ipv4_allowed) && isEmpty(vif.ipv6_allowed) ? 'network_default' : 'locked',
+          mac: vif.mac,
+          mtu: vif.mtu
+        }
+      )))
     }
 
     // TODO: Assign VGPUs.
 
     if (cloudConfig != null) {
       // Refresh the record.
-      vm = await this._waitObjectState(vm.$id, vm => vm.VBDs.length === nVbds)
+      await this.barrier('VM', vm.$ref)
+      vm = this.getObjectByRef(vm.$ref)
 
       // Find the SR of the first VDI.
       let srRef
@@ -222,16 +211,11 @@ export default {
         ? 'createCoreOsCloudInitConfigDrive'
         : 'createCloudInitConfigDrive'
       await this[method](vm.$id, srRef, cloudConfig)
-
-      ++nVbds
     }
 
     // wait for the record with all the VBDs and VIFs
-    return this._waitObjectState(vm.$id, vm =>
-      vm.VBDs.length === nVbds &&
-      vm.VIFs.length === nVifs &&
-      intersection(oldVifs, vm.VIFs).length === 0
-    )
+    await this.barrier('VM', vm.$ref)
+    return this.getObjectByRef(vm.$ref)
   },
 
   // High level method to edit a VM.
