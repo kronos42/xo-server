@@ -418,9 +418,10 @@ function _getBrickName (hostname) {
   return hostname + ':/bricks/xosan/xosandir'
 }
 
-export async function replaceBrick ({ xosansr, previousBrick, newLvmSr }) {
+export async function replaceBrick ({ xosansr, previousBrick, newLvmSr, brickSize }) {
   // TODO: a bit of user input validation on 'previousBrick', it's going to ssh
   const previousIp = previousBrick.split(':')[0]
+  brickSize = brickSize === undefined ? Infinity : brickSize
   const xapi = this.getXapi(xosansr)
   const nodes = xapi.xo.getData(xosansr, 'xosan_config').nodes
   const newIpAddress = _findAFreeIPAddress(nodes)
@@ -430,7 +431,7 @@ export async function replaceBrick ({ xosansr, previousBrick, newLvmSr }) {
   const previousVMEntry = _getIPToVMDict(xapi, xosansr)[previousBrick]
   const arbiter = previousNode.arbiter
   let { data, newVM, addressAndHost } = await this::insertNewGlusterVm(xapi, xosansr, newLvmSr,
-    {labelSuffix: arbiter ? '_arbiter' : '', glusterEndpoint, newIpAddress, increaseDataDisk: !arbiter, brickSize: MAX_DISK_SIZE})
+    {labelSuffix: arbiter ? '_arbiter' : '', glusterEndpoint, newIpAddress, increaseDataDisk: !arbiter, brickSize})
   const brickName = _getBrickName(addressAndHost.address)
   await glusterCmd(glusterEndpoint, `volume replace-brick xosan ${previousBrick} ${brickName} commit force`)
   await glusterCmd(glusterEndpoint, 'peer detach ' + previousIp, true)
@@ -454,7 +455,8 @@ replaceBrick.permission = 'admin'
 replaceBrick.params = {
   xosansr: { type: 'string' },
   previousBrick: { type: 'string' },
-  newLvmSr: { type: 'string' }
+  newLvmSr: { type: 'string' },
+  brickSize: { type: 'number' }
 }
 
 replaceBrick.resolve = {
