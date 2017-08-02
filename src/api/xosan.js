@@ -557,7 +557,7 @@ const insertNewGlusterVm = defer.onFailure(async function ($onFailure, xapi, xos
   return { data, newVM, addressAndHost, glusterEndpoint }
 })
 
-export const addBricks = defer.onFailure(async function ($onFailure, {xosansr, lvmsrs}) {
+export const addBricks = defer.onFailure(async function ($onFailure, {xosansr, lvmsrs, brickSize}) {
   const xapi = this.getXapi(xosansr)
   if (CURRENTLY_CREATING_SRS[xapi.pool.$id]) {
     throw new Error('createSR is already running for this pool')
@@ -573,10 +573,7 @@ export const addBricks = defer.onFailure(async function ($onFailure, {xosansr, l
       const ipAddress = _findIPAddressOutsideList(usedAddresses.concat(newAddresses))
       newAddresses.push(ipAddress)
       // TODO remove MAX_DISK_SIZE limitation. it's just used during the beta
-      const {newVM, addressAndHost} = await this::insertNewGlusterVm(xapi, xosansr, newSr, {
-        ipAddress,
-        brickSize: MAX_DISK_SIZE
-      })
+      const {newVM, addressAndHost} = await this::insertNewGlusterVm(xapi, xosansr, newSr, { ipAddress, brickSize })
       $onFailure(() => glusterCmd(glusterEndpoint, 'peer detach ' + ipAddress, true))
       $onFailure(() => xapi.deleteVm(newVM, true))
       const brickName = _getBrickName(ipAddress)
@@ -608,7 +605,8 @@ addBricks.params = {
     type: 'array',
     items: {
       type: 'string'
-    } }
+    } },
+  brickSize: {type:'number'}
 }
 
 addBricks.resolve = {
