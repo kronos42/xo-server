@@ -606,7 +606,7 @@ addBricks.params = {
     items: {
       type: 'string'
     } },
-  brickSize: {type:'number'}
+  brickSize: {type: 'number'}
 }
 
 addBricks.resolve = {
