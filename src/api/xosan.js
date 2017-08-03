@@ -25,9 +25,6 @@ const XOSAN_VM_SYSTEM_DISK_SIZE = 10 * GIGABYTE
 const XOSAN_DATA_DISK_USEAGE_RATIO = 0.99
 const XOSAN_MAX_DISK_SIZE = 2093050 * 1024 * 1024 // a bit under 2To
 
-// TODO remove MAX_DISK_SIZE limitation. it's just used during the beta. the entire variable and its uses should disappear
-const MAX_DISK_SIZE = 100 * GIGABYTE
-
 const CURRENTLY_CREATING_SRS = {}
 
 function _getIPToVMDict (xapi, sr) {
@@ -302,7 +299,7 @@ async function testSR ({sr}) {
   })
 }
 
-export const createSR = defer.onFailure(async function ($onFailure, { template, pif, vlan, srs, glusterType, redundancy, brickSize = MAX_DISK_SIZE }) {
+export const createSR = defer.onFailure(async function ($onFailure, { template, pif, vlan, srs, glusterType, redundancy, brickSize }) {
   if (!this.requestResource) {
     throw new Error('requestResource is not a function')
   }
@@ -499,9 +496,11 @@ async function _prepareGlusterVm (xapi, lvmSr, newVM, xosanNetwork, ipAddress, {
   await xapi.call('VM.set_xenstore_data', newVM.$ref, xenstoreData)
   if (increaseDataDisk) {
     const dataDisk = newVM.$VBDs.map(vbd => vbd.$VDI).find(vdi => vdi && vdi.name_label === 'xosan_data')
+    const rootDisk = newVM.$VBDs.map(vbd => vbd.$VDI).find(vdi => vdi && vdi.name_label === 'xosan_root')
+    const rootDiskSize =rootDisk.virtual_size
     const srFreeSpace = sr.physical_size - sr.physical_utilisation
     // we use a percentage because it looks like the VDI overhead is proportional
-    const newSize = floor2048(Math.min(maxDiskSize, (srFreeSpace + dataDisk.virtual_size) * XOSAN_DATA_DISK_USEAGE_RATIO))
+    const newSize = floor2048(Math.min(maxDiskSize - rootDiskSize, (srFreeSpace + dataDisk.virtual_size) * XOSAN_DATA_DISK_USEAGE_RATIO))
     await xapi._resizeVdi(dataDisk, Math.min(newSize, XOSAN_MAX_DISK_SIZE))
   }
   await xapi.startVm(newVM)
@@ -572,7 +571,6 @@ export const addBricks = defer.onFailure(async function ($onFailure, {xosansr, l
     for (let newSr of lvmsrs) {
       const ipAddress = _findIPAddressOutsideList(usedAddresses.concat(newAddresses))
       newAddresses.push(ipAddress)
-      // TODO remove MAX_DISK_SIZE limitation. it's just used during the beta
       const {newVM, addressAndHost} = await this::insertNewGlusterVm(xapi, xosansr, newSr, { ipAddress, brickSize })
       $onFailure(() => glusterCmd(glusterEndpoint, 'peer detach ' + ipAddress, true))
       $onFailure(() => xapi.deleteVm(newVM, true))
@@ -689,7 +687,7 @@ POSSIBLE_CONFIGURATIONS[15] = [
   { layout: 'replica', redundancy: 3, capacity: 5 }]
 POSSIBLE_CONFIGURATIONS[16] = [{ layout: 'replica', redundancy: 2, capacity: 8 }]
 
-export async function computeXosanPossibleOptions ({ lvmSrs, brickSize = MAX_DISK_SIZE }) {
+export async function computeXosanPossibleOptions ({ lvmSrs, brickSize }) {
   const count = lvmSrs.length
   const configurations = POSSIBLE_CONFIGURATIONS[count]
   if (!configurations) {
