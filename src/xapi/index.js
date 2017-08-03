@@ -54,6 +54,7 @@ import {
   extractOpaqueRef,
   filterUndefineds,
   getNamespaceForType,
+  getVmDisks,
   canSrHaveNewVdiOfSize,
   isVmHvm,
   isVmRunning,
@@ -345,6 +346,12 @@ export default class Xapi extends XapiBase {
     this._setObjectProperties(this.pool, {
       default_SR: this.getObject(srId).$ref
     })
+  }
+
+  // =================================================================
+
+  async setPoolMaster (hostId) {
+    await this.call('pool.designate_new_master', this.getObject(hostId).$ref)
   }
 
   // =================================================================
@@ -647,45 +654,52 @@ export default class Xapi extends XapiBase {
   async _deleteVm (vm, deleteDisks = true) {
     debug(`Deleting VM ${vm.name_label}`)
 
+    const { $ref } = vm
+
     // It is necessary for suspended VMs to be shut down
     // to be able to delete their VDIs.
     if (vm.power_state !== 'Halted') {
-      await this.call('VM.hard_shutdown', vm.$ref)
+      await this.call('VM.hard_shutdown', $ref)
     }
 
-    if (deleteDisks) {
-      // Compute the VDIs list without duplicates.
-      const vdis = {}
-      forEach(vm.$VBDs, vbd => {
-        let vdi
-        if (
-          // Do not remove CDs and Floppies.
-          vbd.type === 'Disk' &&
+    await this.barrier('VM', $ref)
 
-          // Ignore VBD without VDI.
-          (vdi = vbd.$VDI)
-        ) {
-          vdis[vdi.$id] = vdi
+    return Promise.all([
+      this.call('VM.destroy', $ref),
+
+      asyncMap(vm.$snapshots, snapshot =>
+        this._deleteVm(snapshot)
+      )::ignoreErrors(),
+
+      deleteDisks && asyncMap(getVmDisks(vm), ({ $ref: vdiRef }) => {
+        let onFailure = () => {
+          onFailure = vdi => {
+            console.error(`cannot delete VDI ${vdi.name_label} (from VM ${vm.name_label})`)
+            forEach(vdi.$VBDs, vbd => {
+              if (vbd.VM !== $ref) {
+                const vm = vbd.$VM
+                console.error('- %s (%s)', vm.name_label, vm.uuid)
+              }
+            })
+          }
+
+          // maybe the control domain has not yet unmounted the VDI,
+          // check and retry after 5 seconds
+          return pDelay(5e3).then(test)
         }
-      })
-
-      await Promise.all(mapToArray(vdis, vdi => {
-        if (
-          // Do not remove VBDs attached to other VMs.
-          vdi.VBDs.length < 2 ||
-          every(vdi.$VBDs, vbd => vbd.VM === vm.$ref)
-        ) {
-          return this._deleteVdi(vdi)::ignoreErrors()
+        const test = () => {
+          const vdi = this.getObjectByRef(vdiRef)
+          return (
+            // Only remove VBDs not attached to other VMs.
+            vdi.VBDs.length < 2 ||
+            every(vdi.$VBDs, vbd => vbd.VM === $ref)
+          )
+            ? this._deleteVdi(vdi)
+            : onFailure(vdi)
         }
-        console.error(`cannot delete VDI ${vdi.name_label} (from VM ${vm.name_label})`)
-      }))
-    }
-
-    await Promise.all(mapToArray(vm.$snapshots, snapshot =>
-      this.deleteVm(snapshot.$id)::ignoreErrors()
-    ))
-
-    await this.call('VM.destroy', vm.$ref)
+        return test()
+      })::ignoreErrors()
+    ])
   }
 
   async deleteVm (vmId, deleteDisks) {
@@ -779,12 +793,17 @@ export default class Xapi extends XapiBase {
   @cancellable
   @deferrable.onFailure
   async exportDeltaVm ($onFailure, $cancelToken, vmId, baseVmId = undefined, {
-    snapshotNameLabel = undefined,
+    bypassVdiChainsCheck = false,
+
     // Contains a vdi.$id set of vmId.
     fullVdisRequired = [],
-    disableBaseTags = false
+
+    disableBaseTags = false,
+    snapshotNameLabel = undefined
   } = {}) {
-    this._assertHealthyVdiChains(this.getObject(vmId))
+    if (!bypassVdiChainsCheck) {
+      this._assertHealthyVdiChains(this.getObject(vmId))
+    }
 
     const vm = await this.snapshotVm(vmId)
     $onFailure(() => this._deleteVm(vm))
@@ -999,29 +1018,29 @@ export default class Xapi extends XapiBase {
 
     await Promise.all([
       // Create VBDs.
-      Promise.all(mapToArray(
+      asyncMap(
         delta.vbds,
         vbd => this._createVbd(vm, newVdis[vbd.VDI], vbd)
-      )),
+      ),
 
       // Import VDI contents.
-      Promise.all(mapToArray(
+      asyncMap(
         newVdis,
         async (vdi, id) => {
           for (const stream of ensureArray(streams[`${id}.vhd`])) {
             await this._importVdiContent(vdi, stream, VDI_FORMAT_VHD)
           }
         }
-      )),
+      ),
 
       // Wait for VDI export tasks (if any) termination.
-      Promise.all(mapToArray(
+      asyncMap(
         streams,
         stream => stream.task
-      )),
+      ),
 
       // Create VIFs.
-      Promise.all(mapToArray(delta.vifs, vif => {
+      asyncMap(delta.vifs, vif => {
         const network =
           (vif.$network$uuid && this.getObject(vif.$network$uuid, null)) ||
           networksOnPoolMasterByDevice[vif.device] ||
@@ -1034,7 +1053,7 @@ export default class Xapi extends XapiBase {
             vif
           )
         }
-      }))
+      })
     ])
 
     if (deleteBase && baseVm) {
@@ -1867,6 +1886,7 @@ export default class Xapi extends XapiBase {
     }
 
     await Promise.all([
+      body.task,
       body.checksumVerified,
       this.putResource(body, '/import_raw_vdi/', {
         host: pbd.host,
