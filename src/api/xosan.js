@@ -461,7 +461,7 @@ replaceBrick.resolve = {
 }
 
 async function _prepareGlusterVm (xapi, lvmSr, newVM, xosanNetwork, ipAddress, {labelSuffix = '', increaseDataDisk = true,
-  maxDiskSize = Infinity, memorySize=2 * GIGABYTE}) {
+  maxDiskSize = Infinity, memorySize = 2 * GIGABYTE}) {
   const host = lvmSr.$PBDs[0].$host
   const xenstoreData = {
     'vm-data/hostname': 'XOSAN' + lvmSr.name_label + labelSuffix,
@@ -491,8 +491,8 @@ async function _prepareGlusterVm (xapi, lvmSr, newVM, xosanNetwork, ipAddress, {
     name_description: 'Xosan VM storage',
     // https://bugs.xenserver.org/browse/XSO-762
     memoryMax: memorySize,
-    memoryMin:memorySize,
-    memoryStaticMax:  memorySize,
+    memoryMin: memorySize,
+    memoryStaticMax: memorySize,
     memory: memorySize
   })
   await xapi.call('VM.set_xenstore_data', newVM.$ref, xenstoreData)
