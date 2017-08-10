@@ -299,7 +299,7 @@ async function testSR ({sr}) {
   })
 }
 
-export const createSR = defer.onFailure(async function ($onFailure, { template, pif, vlan, srs, glusterType, redundancy, brickSize }) {
+export const createSR = defer.onFailure(async function ($onFailure, { template, pif, vlan, srs, glusterType, redundancy, brickSize, memorySize }) {
   if (!this.requestResource) {
     throw new Error('requestResource is not a function')
   }
@@ -344,11 +344,11 @@ export const createSR = defer.onFailure(async function ($onFailure, { template, 
       const arbiterIP = NETWORK_PREFIX + (vmIpLastNumber++)
       const arbiterVm = await xapi.copyVm(firstVM, sr)
       $onFailure(() => xapi.deleteVm(arbiterVm, true))
-      arbiter = await _prepareGlusterVm(xapi, sr, arbiterVm, xosanNetwork, arbiterIP, {labelSuffix: '_arbiter', increaseDataDisk: false})
+      arbiter = await _prepareGlusterVm(xapi, sr, arbiterVm, xosanNetwork, arbiterIP, {labelSuffix: '_arbiter', increaseDataDisk: false, memorySize})
       arbiter.arbiter = true
     }
     const ipAndHosts = await asyncMap(vmsAndSrs, vmAndSr => _prepareGlusterVm(xapi, vmAndSr.sr, vmAndSr.vm, xosanNetwork,
-      NETWORK_PREFIX + (vmIpLastNumber++), {maxDiskSize: brickSize}))
+      NETWORK_PREFIX + (vmIpLastNumber++), {maxDiskSize: brickSize, memorySize}))
     const glusterEndpoint = { xapi, hosts: map(ipAndHosts, ih => ih.host), addresses: map(ipAndHosts, ih => ih.address) }
     await configureGluster(redundancy, ipAndHosts, glusterEndpoint, glusterType, arbiter)
     debug('xosan gluster volume started')
@@ -460,7 +460,8 @@ replaceBrick.resolve = {
   xosansr: ['sr', 'SR', 'administrate']
 }
 
-async function _prepareGlusterVm (xapi, lvmSr, newVM, xosanNetwork, ipAddress, {labelSuffix = '', increaseDataDisk = true, maxDiskSize = Infinity}) {
+async function _prepareGlusterVm (xapi, lvmSr, newVM, xosanNetwork, ipAddress, {labelSuffix = '', increaseDataDisk = true,
+  maxDiskSize = Infinity, memorySize=2 * GIGABYTE}) {
   const host = lvmSr.$PBDs[0].$host
   const xenstoreData = {
     'vm-data/hostname': 'XOSAN' + lvmSr.name_label + labelSuffix,
@@ -485,19 +486,20 @@ async function _prepareGlusterVm (xapi, lvmSr, newVM, xosanNetwork, ipAddress, {
       }
     }
   }
-  const newMemory = 2 * GIGABYTE
   await xapi.editVm(newVM, {
     name_label: `XOSAN - ${lvmSr.name_label} - ${host.name_label} ${labelSuffix}`,
     name_description: 'Xosan VM storage',
     // https://bugs.xenserver.org/browse/XSO-762
-    memory_static_max: newMemory,
-    memory_dynamic_max: newMemory
+    memoryMax: memorySize,
+    memoryMin:memorySize,
+    memoryStaticMax:  memorySize,
+    memory: memorySize
   })
   await xapi.call('VM.set_xenstore_data', newVM.$ref, xenstoreData)
   if (increaseDataDisk) {
     const dataDisk = newVM.$VBDs.map(vbd => vbd.$VDI).find(vdi => vdi && vdi.name_label === 'xosan_data')
     const rootDisk = newVM.$VBDs.map(vbd => vbd.$VDI).find(vdi => vdi && vdi.name_label === 'xosan_root')
-    const rootDiskSize =rootDisk.virtual_size
+    const rootDiskSize = rootDisk.virtual_size
     const srFreeSpace = sr.physical_size - sr.physical_utilisation
     // we use a percentage because it looks like the VDI overhead is proportional
     const newSize = floor2048(Math.min(maxDiskSize - rootDiskSize, (srFreeSpace + dataDisk.virtual_size) * XOSAN_DATA_DISK_USEAGE_RATIO))
