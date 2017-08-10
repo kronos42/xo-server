@@ -486,6 +486,7 @@ async function _prepareGlusterVm (xapi, lvmSr, newVM, xosanNetwork, ipAddress, {
       }
     }
   }
+  await xapi.addTag(newVM.$id, `XOSAN-${xapi.pool.name_label}`)
   await xapi.editVm(newVM, {
     name_label: `XOSAN - ${lvmSr.name_label} - ${host.name_label} ${labelSuffix}`,
     name_description: 'Xosan VM storage',
