@@ -1,6 +1,6 @@
 {
   "name": "xo-server",
-  "version": "5.11.1",
+  "version": "5.11.3",
   "license": "AGPL-3.0",
   "description": "Server part of Xen-Orchestra",
   "keywords": [
@@ -110,7 +110,7 @@
     "tmp": "^0.0.31",
     "uuid": "^3.0.1",
     "ws": "^3.0.0",
-    "xen-api": "^0.14.0",
+    "xen-api": "^0.14.2",
     "xml2js": "~0.4.17",
     "xo-acl-resolver": "^0.2.3",
     "xo-collection": "^0.4.1",
