@@ -7,7 +7,6 @@ import { tap, delay } from 'promise-toolbox'
 import {
   includes,
   isArray,
-  find,
   remove,
   filter
 } from 'lodash'
@@ -156,10 +155,8 @@ async function remoteSsh (glusterEndpoint, cmd, ignoreError = false) {
         }
       }
     }
-    debug(result.command.join(' '))
-    debug('=>exit:', result.exit)
-    debug('=>err :', result.stderr)
-    debug('=>out :', result.stdout)
+    debug(result.command.join(' '), '\n  =>exit:', result.exit, '\n  =>err :', result.stderr,
+      '\n  =>out (1000 chars) :', result.stdout.substring(0, 1000))
     // 255 seems to be ssh's own error codes.
     if (result.exit !== 255) {
       if (!ignoreError && result.exit !== 0) {
@@ -172,6 +169,20 @@ async function remoteSsh (glusterEndpoint, cmd, ignoreError = false) {
     JSON.stringify(glusterEndpoint))
 }
 
+function findErrorMessage (commandResut) {
+  if (commandResut['exit'] === 0 && commandResut.parsed) {
+    const cliOut = commandResut.parsed['cliOutput']
+    if (cliOut['opErrstr'] && cliOut['opErrstr'].length) {
+      return cliOut['opErrstr']
+    }
+    // "peer probe" returns it's "already in peer" error in cliOutput/output
+    if (cliOut['output'] && cliOut['output'].length) {
+      return cliOut['output']
+    }
+  }
+  return commandResut['stderr'].length ? commandResut['stderr'] : commandResut['stdout']
+}
+
 async function glusterCmd (glusterEndpoint, cmd, ignoreError = false) {
   const result = await remoteSsh(glusterEndpoint, `gluster --mode=script --xml ${cmd}`, ignoreError)
   if (result['exit'] === 0) {
@@ -179,11 +190,11 @@ async function glusterCmd (glusterEndpoint, cmd, ignoreError = false) {
     const cliOut = result.parsed['cliOutput']
     // we have found cases where opErrno is !=0 and opRet was 0, albeit the operation was an error.
     result.commandStatus = cliOut['opRet'].trim() === '0' && cliOut['opErrno'].trim() === '0'
-    result.error = cliOut['opErrstr']
+    result.error = findErrorMessage(result)
   } else {
     result.commandStatus = false
     // "gluster volume status" timeout error message is reported on stdout instead of stderr
-    result.error = result['stderr'].length ? result['stderr'] : result['stdout']
+    result.error = findErrorMessage(result)
   }
   if (!ignoreError && !result.commandStatus) {
     const error = new Error(`error in gluster "${result.error}"`)
@@ -428,20 +439,19 @@ export async function replaceBrick ({ xosansr, previousBrick, newLvmSr, brickSiz
   const xapi = this.getXapi(xosansr)
   const nodes = xapi.xo.getData(xosansr, 'xosan_config').nodes
   const newIpAddress = _findAFreeIPAddress(nodes)
-  const previousNode = find(nodes, node => node.vm.ip === previousIp)
-  const stayingNodes = filter(nodes, node => node !== previousNode)
+  const nodeIndex = nodes.findIndex(node => node.vm.ip === previousIp)
+  const stayingNodes = filter(nodes, (node, index) => index !== nodeIndex)
   const glusterEndpoint = { xapi,
     hosts: map(stayingNodes, node => xapi.getObject(node.host)),
     addresses: map(stayingNodes, node => node.vm.ip) }
   const previousVMEntry = _getIPToVMDict(xapi, xosansr)[previousBrick]
-  const arbiter = previousNode.arbiter
+  const arbiter = nodes[nodeIndex].arbiter
   let { data, newVM, addressAndHost } = await this::insertNewGlusterVm(xapi, xosansr, newLvmSr,
     {labelSuffix: arbiter ? '_arbiter' : '', glusterEndpoint, newIpAddress, increaseDataDisk: !arbiter, brickSize})
   const brickName = _getBrickName(addressAndHost.address)
   await glusterCmd(glusterEndpoint, `volume replace-brick xosan ${previousBrick} ${brickName} commit force`)
-  await glusterCmd(glusterEndpoint, 'peer detach ' + previousIp, true)
-  remove(data.nodes, node => node.vm.ip === previousIp)
-  data.nodes.push({
+  await glusterCmd(glusterEndpoint, 'peer detach ' + previousIp)
+  data.nodes.splice(nodeIndex, 1, {
     brickName: brickName,
     host: addressAndHost.host.$id,
     arbiter: arbiter,
