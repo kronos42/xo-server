@@ -348,7 +348,8 @@ export const createSR = defer.onFailure(async function ($onFailure, { template, 
       const arbiterVm = await xapi.copyVm(firstVM, sr)
       $onFailure(() => xapi.deleteVm(arbiterVm, true))
       arbiter = await _prepareGlusterVm(xapi, sr, arbiterVm, xosanNetwork, arbiterIP, {labelSuffix: '_arbiter',
-        increaseDataDisk: false, memorySize})
+        increaseDataDisk: false,
+        memorySize})
       arbiter.arbiter = true
     }
     const ipAndHosts = await asyncMap(vmsAndSrs, vmAndSr => _prepareGlusterVm(xapi, vmAndSr.sr, vmAndSr.vm, xosanNetwork,
@@ -429,7 +430,8 @@ export async function replaceBrick ({ xosansr, previousBrick, newLvmSr, brickSiz
   const newIpAddress = _findAFreeIPAddress(nodes)
   const previousNode = find(nodes, node => node.vm.ip === previousIp)
   const stayingNodes = filter(nodes, node => node !== previousNode)
-  const glusterEndpoint = { xapi, hosts: map(stayingNodes, node => xapi.getObject(node.host)),
+  const glusterEndpoint = { xapi,
+    hosts: map(stayingNodes, node => xapi.getObject(node.host)),
     addresses: map(stayingNodes, node => node.vm.ip) }
   const previousVMEntry = _getIPToVMDict(xapi, xosansr)[previousBrick]
   const arbiter = previousNode.arbiter
@@ -565,7 +567,9 @@ const insertNewGlusterVm = defer.onFailure(async function ($onFailure, xapi, xos
   const newVM = await this::_importGlusterVM(xapi, data.template, lvmsrId)
   $onFailure(() => xapi.deleteVm(newVM, true))
   const addressAndHost = await _prepareGlusterVm(xapi, srObject, newVM, xosanNetwork, ipAddress, {labelSuffix,
-    increaseDataDisk, maxDiskSize: brickSize, memorySize: vmMemory})
+    increaseDataDisk,
+    maxDiskSize: brickSize,
+    memorySize: vmMemory})
   if (!glusterEndpoint) {
     glusterEndpoint = this::_getGlusterEndpoint(xosansr)
   }
