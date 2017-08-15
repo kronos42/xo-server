@@ -574,8 +574,8 @@ const insertNewGlusterVm = defer.onFailure(async function ($onFailure, xapi, xos
   for (let node of data.nodes) {
     try {
       vmsMemories.push(xapi.getObject(node.vm.id).memory_dynamic_max)
-    } catch(e) {
-      //pass
+    } catch (e) {
+      // pass
     }
   }
   const xosanNetwork = xapi.getObject(data.network)
