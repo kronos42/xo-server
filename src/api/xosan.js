@@ -570,7 +570,14 @@ const insertNewGlusterVm = defer.onFailure(async function ($onFailure, xapi, xos
   if (ipAddress === null) {
     ipAddress = _findAFreeIPAddress(data.nodes)
   }
-  const vmMemory = _median(map(data.nodes, node => xapi.getObject(node.vm.id).memory_dynamic_max))
+  const vmsMemories = []
+  for (let node of data.nodes) {
+    try {
+      vmsMemories.push(xapi.getObject(node.vm.id).memory_dynamic_max)
+    } catch(e) {
+      //pass
+    }
+  }
   const xosanNetwork = xapi.getObject(data.network)
   const srObject = xapi.getObject(lvmsrId)
   // can't really copy an existing VM, because existing gluster VMs disks might too large to be copied.
@@ -579,7 +586,7 @@ const insertNewGlusterVm = defer.onFailure(async function ($onFailure, xapi, xos
   const addressAndHost = await _prepareGlusterVm(xapi, srObject, newVM, xosanNetwork, ipAddress, {labelSuffix,
     increaseDataDisk,
     maxDiskSize: brickSize,
-    memorySize: vmMemory})
+    memorySize: vmsMemories.length ? _median(vmsMemories) : 2 * GIGABYTE})
   if (!glusterEndpoint) {
     glusterEndpoint = this::_getGlusterEndpoint(xosansr)
   }
