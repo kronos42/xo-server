@@ -8,7 +8,8 @@ import {
   includes,
   isArray,
   remove,
-  filter
+  filter,
+  range
 } from 'lodash'
 import {
   asyncMap,
@@ -19,6 +20,7 @@ const debug = createLogger('xo:xosan')
 
 const SSH_KEY_FILE = 'id_rsa_xosan'
 const NETWORK_PREFIX = '172.31.100.'
+const VM_FIRST_NUMBER = 101
 const GIGABYTE = 1024 * 1024 * 1024
 const XOSAN_VM_SYSTEM_DISK_SIZE = 10 * GIGABYTE
 const XOSAN_DATA_DISK_USEAGE_RATIO = 0.99
@@ -322,7 +324,7 @@ export const createSR = defer.onFailure(async function ($onFailure, { template, 
     return // TODO: throw an error
   }
 
-  let vmIpLastNumber = 101
+  let vmIpLastNumber = VM_FIRST_NUMBER
   const xapi = this.getXapi(srs[0])
   if (CURRENTLY_CREATING_SRS[xapi.pool.$id]) {
     throw new Error('createSR is already running for this pool')
@@ -368,7 +370,12 @@ export const createSR = defer.onFailure(async function ($onFailure, { template, 
     const glusterEndpoint = { xapi, hosts: map(ipAndHosts, ih => ih.host), addresses: map(ipAndHosts, ih => ih.address) }
     await configureGluster(redundancy, ipAndHosts, glusterEndpoint, glusterType, arbiter)
     debug('xosan gluster volume started')
-    const config = { server: ipAndHosts[0].address + ':/xosan', backupserver: ipAndHosts[1].address }
+    // We use 10 IPs of the gluster VM range as backup, in the hope that even if the first VM gets destroyed we find at least
+    // one VM to give mount the volfile.
+    // It is not possible to edit the device_config after the SR is created and this data is only used at mount time when rebooting
+    // the hosts.
+    const backupservers = map(range(VM_FIRST_NUMBER, VM_FIRST_NUMBER + 10), ipLastByte => NETWORK_PREFIX + ipLastByte).join(':')
+    const config = { server: ipAndHosts[0].address + ':/xosan', backupservers }
     const xosanSrRef = await xapi.call('SR.create', firstSr.$PBDs[0].$host.$ref, config, 0, 'XOSAN', 'XOSAN',
       'xosan', '', true, {})
     // we just forget because the cleanup actions are stacked in the $onFailure system
