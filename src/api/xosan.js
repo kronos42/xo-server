@@ -186,9 +186,13 @@ function findErrorMessage (commandResut) {
 }
 
 async function glusterCmd (glusterEndpoint, cmd, ignoreError = false) {
-  const result = await remoteSsh(glusterEndpoint, `gluster --mode=script --xml ${cmd}`, ignoreError)
-  if (result['exit'] === 0) {
+  const result = await remoteSsh(glusterEndpoint, `gluster --mode=script --xml ${cmd}`, true)
+  try  {
     result.parsed = parseXml(result['stdout'])
+  } catch (e) {
+    // pass, we never know if a message can be parsed or not, so we just try
+  }
+  if (result['exit'] === 0) {
     const cliOut = result.parsed['cliOutput']
     // we have found cases where opErrno is !=0 and opRet was 0, albeit the operation was an error.
     result.commandStatus = cliOut['opRet'].trim() === '0' && cliOut['opErrno'].trim() === '0'
@@ -303,6 +307,8 @@ async function configureGluster (redundancy, ipAndHosts, glusterEndpoint, gluste
     await glusterCmd(glusterEndpoint, confChunk)
   }
   await glusterCmd(glusterEndpoint, 'volume start xosan')
+  await glusterCmd(glusterEndpoint, 'volume quota xosan enable')
+  await glusterCmd(glusterEndpoint, 'volume quota xosan limit-usage / 20GB')
 }
 
 async function testSR ({sr}) {
